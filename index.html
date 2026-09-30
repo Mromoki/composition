@@ -2,20 +2,43 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>構図カメラアプリ</title>
 <style>
-  /* 全体のスタイルとリセット */
-  body { margin: 0; padding: 0; background-color: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+  /* 全体のスタイルとリセット（スマホ画面に完全に固定する） */
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; 
+    height: 100dvh; /* スマホのアドレスバー等を考慮した動的な画面サイズ */
+    background-color: #111; color: #fff; 
+    font-family: sans-serif;
+    overflow: hidden; /* スクロールを完全に禁止 */
+    position: fixed; /* 画面全体が動く（ラバーバンド現象）のを防ぐ */
+    top: 0; left: 0;
+    display: flex; flex-direction: column;
+  }
   
   /* カメラ領域（アスペクト比制御のコンテナ） */
-  #camera-container-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; width: 100%; position: relative; }
+  #camera-container-wrapper {
+    flex: 1; /* 残りの画面スペースを全て埋める */
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; width: 100%; position: relative;
+  }
   
   /* コンテナのサイズはJSで計算して適用する */
-  #camera-container { position: relative; background: #000; overflow: hidden; transition: width 0.3s, height 0.3s; }
+  #camera-container {
+    position: relative; background: #000; overflow: hidden;
+    transition: width 0.3s, height 0.3s;
+  }
   
   /* 構図の説明を表示するエリア（画面上部） */
-  #composition-desc { position: absolute; top: 10px; left: 10px; right: 10px; background: rgba(0, 0, 0, 0.6); color: #fff; padding: 10px; border-radius: 8px; font-size: 13px; line-height: 1.4; z-index: 20; display: none; pointer-events: none; backdrop-filter: blur(4px); text-align: left; border: 1px solid rgba(255,255,255,0.2); }
+  #composition-desc {
+    position: absolute; top: 15px; left: 15px; right: 15px;
+    background: rgba(0, 0, 0, 0.6); color: #fff; padding: 10px; border-radius: 8px;
+    font-size: 13px; line-height: 1.4; z-index: 20; display: none;
+    pointer-events: none; backdrop-filter: blur(4px); text-align: left;
+    border: 1px solid rgba(255,255,255,0.2);
+  }
   #composition-desc strong { color: #ffd700; display: block; margin-bottom: 4px; }
 
   /* ビデオストリーム。object-fitで歪みを防ぐ */
@@ -30,24 +53,46 @@
   .guide-line { stroke-width: 1.5; fill: none; transition: stroke 0.3s; }
   
   /* UIコントロール領域 */
-  #controls { height: 100px; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; background-color: #000; z-index: 10; }
+  #controls {
+    height: 100px;
+    flex-shrink: 0; /* 画面が狭くてもコントロールバーのサイズを維持する */
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0 20px;
+    padding-bottom: env(safe-area-inset-bottom); /* iPhone下部のホームバー領域を確保 */
+    background-color: #000; z-index: 10;
+  }
   
   /* ボタン群のスタイル */
   .btn-group { display: flex; flex-direction: column; gap: 10px; width: 80px; }
-  button { background: rgba(255, 255, 255, 0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 8px 4px; font-size: 12px; cursor: pointer; transition: background 0.2s; backdrop-filter: blur(4px); }
+  button {
+    background: rgba(255, 255, 255, 0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4);
+    border-radius: 8px; padding: 8px 4px; font-size: 12px; cursor: pointer;
+    transition: background 0.2s; backdrop-filter: blur(4px); touch-action: manipulation;
+  }
   button:active { background: rgba(255, 255, 255, 0.4); }
   
   /* シャッターボタン（中央） */
-  #shutter-btn { width: 64px; height: 64px; border-radius: 50%; background: #fff; border: 4px solid #aaa; outline: none; cursor: pointer; transition: transform 0.1s; }
+  #shutter-btn {
+    width: 64px; height: 64px; border-radius: 50%; background: #fff;
+    border: 4px solid #aaa; outline: none; cursor: pointer; transition: transform 0.1s;
+  }
   #shutter-btn:active { transform: scale(0.9); background: #eee; }
   
   /* 構図選択メニュー（左下） */
-  #composition-menu { display: none; position: absolute; bottom: 110px; left: 10px; background: rgba(0,0,0,0.8); border-radius: 8px; padding: 10px; max-height: 60vh; overflow-y: auto; z-index: 20; border: 1px solid #333; }
+  #composition-menu {
+    display: none; position: absolute; bottom: calc(110px + env(safe-area-inset-bottom)); left: 10px;
+    background: rgba(0,0,0,0.8); border-radius: 8px; padding: 10px;
+    max-height: 50vh; overflow-y: auto; z-index: 20; border: 1px solid #333;
+  }
   #composition-menu button { display: block; width: 100%; margin-bottom: 5px; text-align: left; border: none; padding: 10px; }
   #composition-menu button.active { background: #444; font-weight: bold; }
   
   /* エラー画面 */
-  #error-screen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #111; color: #ff6b6b; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; box-sizing: border-box; z-index: 50; }
+  #error-screen {
+    display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: #111; color: #ff6b6b; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; text-align: center; box-sizing: border-box; z-index: 50;
+  }
 </style>
 </head>
 <body>
@@ -101,11 +146,11 @@
 let currentStream = null;
 let currentAspectIndex = 0;
 
-// アスペクト比を計算しやすいように数値（ratio）として保持
+// アスペクト比の設定（縦横比を柔軟に計算するため w と h で管理）
 const aspects = [
-  { label: '4:3', ratio: 3 / 4 }, // 縦持ち時を基準に計算（縦:横）
-  { label: '16:9', ratio: 9 / 16 },
-  { label: '1:1', ratio: 1 / 1 }
+  { label: '4:3', w: 4, h: 3 },
+  { label: '16:9', w: 16, h: 9 },
+  { label: '1:1', w: 1, h: 1 }
 ];
 
 let currentColorIndex = 0;
@@ -165,7 +210,6 @@ async function initCamera() {
     video.srcObject = currentStream;
     errorScreen.style.display = 'none';
     
-    // カメラの準備ができたらアスペクト比を適用
     video.onloadedmetadata = () => {
       updateContainerSize();
     };
@@ -182,32 +226,38 @@ async function initCamera() {
 // 4. アスペクト比の確実な適用 (JS計算)
 // ==========================================
 function updateContainerSize() {
-  const targetRatio = aspects[currentAspectIndex].ratio; // 例: 3/4 = 0.75
   const ww = wrapper.clientWidth;
   const wh = wrapper.clientHeight;
+  if (ww === 0 || wh === 0) return;
+
+  const aspect = aspects[currentAspectIndex];
+  
+  // スマホの向き（縦持ち・横持ち）を判定して比率を反転
+  const isPortrait = wh > ww;
+  let targetRatio = aspect.w / aspect.h;
+  if (isPortrait) {
+    targetRatio = aspect.h / aspect.w; // 縦持ち時は 3:4 などに変換
+  }
+
   const screenRatio = ww / wh;
 
   if (screenRatio > targetRatio) {
-    // 画面の方が横長（あるいはアスペクト比が縦長すぎる）
-    // 高さを最大にして、幅を計算
+    // コンテナの方が横長：高さを基準に幅を決める
     cameraContainer.style.height = wh + 'px';
     cameraContainer.style.width = (wh * targetRatio) + 'px';
   } else {
-    // 画面の方が縦長
-    // 幅を最大にして、高さを計算
+    // コンテナの方が縦長：幅を基準に高さを決める
     cameraContainer.style.width = ww + 'px';
     cameraContainer.style.height = (ww / targetRatio) + 'px';
   }
 }
 
-// 画面回転時やリサイズ時に再計算
+// リサイズや画面回転時に再計算
 window.addEventListener('resize', updateContainerSize);
 
 // ==========================================
 // 5. UI更新処理
 // ==========================================
-
-// 構図メニューの生成
 compositions.forEach((comp, index) => {
   const btn = document.createElement('button');
   btn.textContent = comp.name;
@@ -215,7 +265,6 @@ compositions.forEach((comp, index) => {
     dynamicGuide.innerHTML = comp.svg;
     compMenu.style.display = 'none';
     
-    // 説明テキストの表示
     if (comp.desc) {
       compositionDesc.innerHTML = `<strong>${comp.name}</strong>${comp.desc}`;
       compositionDesc.style.display = 'block';
@@ -223,28 +272,23 @@ compositions.forEach((comp, index) => {
       compositionDesc.style.display = 'none';
     }
     
-    // アクティブ状態の切り替え
     Array.from(compMenu.children).forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
   };
   compMenu.appendChild(btn);
 });
-// 初期状態（三分割をセット）
 compMenu.children[1].click();
 
-// 構図メニュー表示トグル
 compBtn.onclick = () => {
   compMenu.style.display = compMenu.style.display === 'block' ? 'none' : 'block';
 };
 
-// アスペクト比変更
 aspectBtn.onclick = () => {
   currentAspectIndex = (currentAspectIndex + 1) % aspects.length;
   aspectBtn.textContent = aspects[currentAspectIndex].label;
-  updateContainerSize(); // 再計算して適用
+  updateContainerSize(); 
 };
 
-// ガイド色変更
 colorBtn.onclick = () => {
   currentColorIndex = (currentColorIndex + 1) % colors.length;
   const targetColor = colors[currentColorIndex];
@@ -308,7 +352,6 @@ shutterBtn.onclick = () => {
   setTimeout(() => { document.body.removeChild(flash); }, 350);
 };
 
-// 画面外をタッチしたらメニューを閉じる
 document.addEventListener('click', (e) => {
   if(!compMenu.contains(e.target) && e.target !== compBtn) {
     compMenu.style.display = 'none';
