@@ -10,8 +10,14 @@
   
   /* カメラ領域（アスペクト比制御のコンテナ） */
   #camera-container-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; width: 100%; position: relative; }
-  #camera-container { position: relative; width: 100%; max-height: 100%; aspect-ratio: 4 / 3; overflow: hidden; transition: aspect-ratio 0.3s; background: #000; }
   
+  /* コンテナのサイズはJSで計算して適用する */
+  #camera-container { position: relative; background: #000; overflow: hidden; transition: width 0.3s, height 0.3s; }
+  
+  /* 構図の説明を表示するエリア（画面上部） */
+  #composition-desc { position: absolute; top: 10px; left: 10px; right: 10px; background: rgba(0, 0, 0, 0.6); color: #fff; padding: 10px; border-radius: 8px; font-size: 13px; line-height: 1.4; z-index: 20; display: none; pointer-events: none; backdrop-filter: blur(4px); text-align: left; border: 1px solid rgba(255,255,255,0.2); }
+  #composition-desc strong { color: #ffd700; display: block; margin-bottom: 4px; }
+
   /* ビデオストリーム。object-fitで歪みを防ぐ */
   video { width: 100%; height: 100%; object-fit: cover; display: block; }
   
@@ -52,6 +58,9 @@
 </div>
 
 <div id="camera-container-wrapper">
+  <!-- 構図の説明表示エリア -->
+  <div id="composition-desc"></div>
+
   <div id="camera-container">
     <video id="camera-video" autoplay playsinline muted></video>
     
@@ -59,7 +68,6 @@
     <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
       <!-- 常に表示される四分割線（画面を4つのエリアに分ける十字） -->
       <path class="fixed-grid-line" id="fixed-grid" d="M50 0 V100 M0 50 H100" stroke="rgba(255,255,255,0.5)" />
-      
       <!-- 選択式の構図ガイド（JSでパスを描画） -->
       <g id="dynamic-guide" class="guide-line" stroke="white"></g>
     </svg>
@@ -92,10 +100,12 @@
 // ==========================================
 let currentStream = null;
 let currentAspectIndex = 0;
+
+// アスペクト比を計算しやすいように数値（ratio）として保持
 const aspects = [
-  { label: '4:3', value: '4 / 3' },
-  { label: '16:9', value: '16 / 9' },
-  { label: '1:1', value: '1 / 1' }
+  { label: '4:3', ratio: 3 / 4 }, // 縦持ち時を基準に計算（縦:横）
+  { label: '16:9', ratio: 9 / 16 },
+  { label: '1:1', ratio: 1 / 1 }
 ];
 
 let currentColorIndex = 0;
@@ -107,19 +117,19 @@ const colors = [
   { label: '黒', value: 'black' }
 ];
 
-// 構図リストとSVGのパス（viewBox 0 0 100 100 に対する相対座標）
+// 構図リストとSVGパス、説明文
 const compositions = [
-  { id: 'none', name: 'オフ', svg: '' },
-  { id: 'thirds', name: '三分割', svg: '<path d="M33.3 0 V100 M66.7 0 V100 M0 33.3 H100 M0 66.7 H100" />' },
-  { id: 'bullseye', name: '日の丸', svg: '<circle cx="50" cy="50" r="20" />' },
-  { id: 'diagonal', name: '対角線', svg: '<path d="M0 0 L100 100 M100 0 L0 100" />' },
-  { id: 'radial', name: '放射線', svg: '<path d="M50 50 L0 0 M50 50 L50 0 M50 50 L100 0 M50 50 L100 50 M50 50 L100 100 M50 50 L50 100 M50 50 L0 100 M50 50 L0 50" />' },
-  { id: 'frame', name: 'フレーム', svg: '<rect x="15" y="15" width="70" height="70" />' },
-  { id: 'symmetry', name: 'シンメトリー', svg: '<path d="M50 0 V100" stroke-width="3" />' },
-  { id: 'scurve', name: 'S字・C字', svg: '<path d="M 70 20 C 20 40, 80 60, 30 80" stroke-width="2" />' },
-  { id: 'triangle', name: '三角', svg: '<path d="M50 20 L20 80 L80 80 Z" />' },
-  { id: 'sandwich', name: 'サンドイッチ', svg: '<rect x="0" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/><rect x="80" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/>' },
-  { id: 'pattern', name: '反復', svg: '<path d="M20 0 V100 M40 0 V100 M60 0 V100 M80 0 V100 M0 20 H100 M0 40 H100 M0 60 H100 M0 80 H100" stroke-width="0.5"/>' }
+  { id: 'none', name: 'オフ', svg: '', desc: '' },
+  { id: 'thirds', name: '三分割構図', svg: '<path d="M33.3 0 V100 M66.7 0 V100 M0 33.3 H100 M0 66.7 H100" />', desc: '風景、ポートレート、スナップなど、どんな撮影でも手軽に安定感を出したいときに使います。交点やライン上に被写体を配置してください。' },
+  { id: 'bullseye', name: '日の丸構図', svg: '<circle cx="50" cy="50" r="20" />', desc: '花、料理、ポートレートの顔など、視線を中央に集めてインパクトを出したいときに使います。' },
+  { id: 'diagonal', name: '対角線構図', svg: '<path d="M0 0 L100 100 M100 0 L0 100" />', desc: '道路、階段、電車、川など、写真に動きや躍動感を出したいときに使います。ラインに沿って被写体を配置します。' },
+  { id: 'radial', name: '放射線構図', svg: '<path d="M50 50 L0 0 M50 50 L50 0 M50 50 L100 0 M50 50 L100 50 M50 50 L100 100 M50 50 L50 100 M50 50 L0 100 M50 50 L0 50" />', desc: '見上げた高層ビル群、まっすぐ続く道や線路など、強い奥行き感やスケール感を出したいときに使います。' },
+  { id: 'frame', name: 'フレーム構図', svg: '<rect x="15" y="15" width="70" height="70" />', desc: '窓越しの風景など、手前にあるものを額縁に見立てて奥行きを出しつつ視線を主題に誘導したいときに使います。' },
+  { id: 'symmetry', name: 'シンメトリー構図', svg: '<path d="M50 0 V100" stroke-width="3" />', desc: '神社仏閣や正面からの建築、水面のリフレクションなど、整然とした美しさや荘厳さを出したいときに使います。' },
+  { id: 'scurve', name: 'S字・C字構図', svg: '<path d="M 70 20 C 20 40, 80 60, 30 80" stroke-width="2" />', desc: '曲がりくねった川や道路、丸いお皿の料理など、優雅さや柔らかさを表現したいときに使います。' },
+  { id: 'triangle', name: '三角構図', svg: '<path d="M50 20 L20 80 L80 80 Z" />', desc: '山、タワー、立ち並ぶ木々など、どっしりとした安定感や高さを強調したいときに使います。' },
+  { id: 'sandwich', name: 'サンドイッチ構図', svg: '<rect x="0" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/><rect x="80" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/>', desc: '建物の隙間から見える月や前ボケなど、主題を左右または上下から挟み込んで立体的に引き立たせたいときに使います。' },
+  { id: 'pattern', name: '反復構図', svg: '<path d="M20 0 V100 M40 0 V100 M60 0 V100 M80 0 V100 M0 20 H100 M0 40 H100 M0 60 H100 M0 80 H100" stroke-width="0.5"/>', desc: '敷き詰められた花畑、整列した商品、ビルの窓など、リズム感や集合美を見せたいときに使います。' }
 ];
 
 // ==========================================
@@ -127,6 +137,7 @@ const compositions = [
 // ==========================================
 const video = document.getElementById('camera-video');
 const cameraContainer = document.getElementById('camera-container');
+const wrapper = document.getElementById('camera-container-wrapper');
 const dynamicGuide = document.getElementById('dynamic-guide');
 const fixedGrid = document.getElementById('fixed-grid');
 const compMenu = document.getElementById('composition-menu');
@@ -136,6 +147,7 @@ const colorBtn = document.getElementById('color-btn');
 const shutterBtn = document.getElementById('shutter-btn');
 const errorScreen = document.getElementById('error-screen');
 const errorMessage = document.getElementById('error-message');
+const compositionDesc = document.getElementById('composition-desc');
 
 // ==========================================
 // 3. カメラ初期化処理
@@ -145,7 +157,6 @@ async function initCamera() {
     if (currentStream) {
       currentStream.getTracks().forEach(track => track.stop());
     }
-    // 背面カメラを優先的に要求
     const constraints = {
       video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false
@@ -153,6 +164,11 @@ async function initCamera() {
     currentStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = currentStream;
     errorScreen.style.display = 'none';
+    
+    // カメラの準備ができたらアスペクト比を適用
+    video.onloadedmetadata = () => {
+      updateContainerSize();
+    };
   } catch (err) {
     console.error("Camera Error: ", err);
     errorScreen.style.display = 'flex';
@@ -163,16 +179,49 @@ async function initCamera() {
 }
 
 // ==========================================
-// 4. UI更新処理
+// 4. アスペクト比の確実な適用 (JS計算)
+// ==========================================
+function updateContainerSize() {
+  const targetRatio = aspects[currentAspectIndex].ratio; // 例: 3/4 = 0.75
+  const ww = wrapper.clientWidth;
+  const wh = wrapper.clientHeight;
+  const screenRatio = ww / wh;
+
+  if (screenRatio > targetRatio) {
+    // 画面の方が横長（あるいはアスペクト比が縦長すぎる）
+    // 高さを最大にして、幅を計算
+    cameraContainer.style.height = wh + 'px';
+    cameraContainer.style.width = (wh * targetRatio) + 'px';
+  } else {
+    // 画面の方が縦長
+    // 幅を最大にして、高さを計算
+    cameraContainer.style.width = ww + 'px';
+    cameraContainer.style.height = (ww / targetRatio) + 'px';
+  }
+}
+
+// 画面回転時やリサイズ時に再計算
+window.addEventListener('resize', updateContainerSize);
+
+// ==========================================
+// 5. UI更新処理
 // ==========================================
 
 // 構図メニューの生成
-compositions.forEach((comp) => {
+compositions.forEach((comp, index) => {
   const btn = document.createElement('button');
   btn.textContent = comp.name;
   btn.onclick = () => {
     dynamicGuide.innerHTML = comp.svg;
     compMenu.style.display = 'none';
+    
+    // 説明テキストの表示
+    if (comp.desc) {
+      compositionDesc.innerHTML = `<strong>${comp.name}</strong>${comp.desc}`;
+      compositionDesc.style.display = 'block';
+    } else {
+      compositionDesc.style.display = 'none';
+    }
     
     // アクティブ状態の切り替え
     Array.from(compMenu.children).forEach(c => c.classList.remove('active'));
@@ -191,9 +240,8 @@ compBtn.onclick = () => {
 // アスペクト比変更
 aspectBtn.onclick = () => {
   currentAspectIndex = (currentAspectIndex + 1) % aspects.length;
-  const targetAspect = aspects[currentAspectIndex];
-  cameraContainer.style.aspectRatio = targetAspect.value;
-  aspectBtn.textContent = targetAspect.label;
+  aspectBtn.textContent = aspects[currentAspectIndex].label;
+  updateContainerSize(); // 再計算して適用
 };
 
 // ガイド色変更
@@ -201,9 +249,8 @@ colorBtn.onclick = () => {
   currentColorIndex = (currentColorIndex + 1) % colors.length;
   const targetColor = colors[currentColorIndex];
   dynamicGuide.setAttribute('stroke', targetColor.value);
-  dynamicGuide.style.color = targetColor.value; // fill="currentColor"用
+  dynamicGuide.style.color = targetColor.value;
   
-  // 常時表示の四分割線の色も薄めに連動
   fixedGrid.setAttribute('stroke', targetColor.value);
   fixedGrid.style.opacity = "0.5";
   
@@ -211,7 +258,7 @@ colorBtn.onclick = () => {
 };
 
 // ==========================================
-// 5. 写真撮影（クロップ処理含む）
+// 6. 写真撮影（クロップ処理）
 // ==========================================
 shutterBtn.onclick = () => {
   if(!video.videoWidth) return;
@@ -219,16 +266,12 @@ shutterBtn.onclick = () => {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   
-  // 表示されているコンテナの実サイズを取得
   const containerWidth = cameraContainer.clientWidth;
   const containerHeight = cameraContainer.clientHeight;
-  
-  // Retinaディスプレイ等に対応するため高画質化係数を設定
   const scale = window.devicePixelRatio || 1;
   canvas.width = containerWidth * scale;
   canvas.height = containerHeight * scale;
   
-  // videoのオリジナルサイズとアスペクト比計算
   const vWidth = video.videoWidth;
   const vHeight = video.videoHeight;
   const containerRatio = containerWidth / containerHeight;
@@ -236,27 +279,21 @@ shutterBtn.onclick = () => {
   
   let sourceX = 0, sourceY = 0, sourceWidth = vWidth, sourceHeight = vHeight;
   
-  // object-fit: cover をシミュレートして正確なクロップ範囲を計算
   if (containerRatio > videoRatio) {
-    // コンテナの方が横長：上下をカット
     sourceHeight = vWidth / containerRatio;
     sourceY = (vHeight - sourceHeight) / 2;
   } else {
-    // コンテナの方が縦長：左右をカット
     sourceWidth = vHeight * containerRatio;
     sourceX = (vWidth - sourceWidth) / 2;
   }
   
-  // Canvasに描画
   ctx.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
   
-  // 画像としてダウンロード
   const link = document.createElement('a');
   link.download = `photo_${new Date().getTime()}.png`;
   link.href = canvas.toDataURL('image/png');
   link.click();
   
-  // シャッターを切った演出（画面を一瞬白くする）
   const flash = document.createElement('div');
   flash.style.position = 'absolute';
   flash.style.top = '0'; flash.style.left = '0';
@@ -271,9 +308,6 @@ shutterBtn.onclick = () => {
   setTimeout(() => { document.body.removeChild(flash); }, 350);
 };
 
-// ==========================================
-// 6. 起動
-// ==========================================
 // 画面外をタッチしたらメニューを閉じる
 document.addEventListener('click', (e) => {
   if(!compMenu.contains(e.target) && e.target !== compBtn) {
@@ -281,7 +315,7 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// 起動処理
+// 起動
 window.onload = initCamera;
 
 </script>
