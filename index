@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>構図カメラアプリ</title>
+<style>
+  /* 全体のスタイルとリセット */
+  body { margin: 0; padding: 0; background-color: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+  
+  /* カメラ領域（アスペクト比制御のコンテナ） */
+  #camera-container-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; width: 100%; position: relative; }
+  #camera-container { position: relative; width: 100%; max-height: 100%; aspect-ratio: 4 / 3; overflow: hidden; transition: aspect-ratio 0.3s; background: #000; }
+  
+  /* ビデオストリーム。object-fitで歪みを防ぐ */
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  
+  /* SVGオーバーレイ（構図ガイド用） */
+  svg.overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  
+  /* 常時表示の四分割線（十字の点線） */
+  .fixed-grid-line { stroke-width: 0.5; stroke-dasharray: 2, 2; }
+  /* 切り替え式の構図ガイド */
+  .guide-line { stroke-width: 1.5; fill: none; transition: stroke 0.3s; }
+  
+  /* UIコントロール領域 */
+  #controls { height: 100px; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; background-color: #000; z-index: 10; }
+  
+  /* ボタン群のスタイル */
+  .btn-group { display: flex; flex-direction: column; gap: 10px; width: 80px; }
+  button { background: rgba(255, 255, 255, 0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 8px 4px; font-size: 12px; cursor: pointer; transition: background 0.2s; backdrop-filter: blur(4px); }
+  button:active { background: rgba(255, 255, 255, 0.4); }
+  
+  /* シャッターボタン（中央） */
+  #shutter-btn { width: 64px; height: 64px; border-radius: 50%; background: #fff; border: 4px solid #aaa; outline: none; cursor: pointer; transition: transform 0.1s; }
+  #shutter-btn:active { transform: scale(0.9); background: #eee; }
+  
+  /* 構図選択メニュー（左下） */
+  #composition-menu { display: none; position: absolute; bottom: 110px; left: 10px; background: rgba(0,0,0,0.8); border-radius: 8px; padding: 10px; max-height: 60vh; overflow-y: auto; z-index: 20; border: 1px solid #333; }
+  #composition-menu button { display: block; width: 100%; margin-bottom: 5px; text-align: left; border: none; padding: 10px; }
+  #composition-menu button.active { background: #444; font-weight: bold; }
+  
+  /* エラー画面 */
+  #error-screen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #111; color: #ff6b6b; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; box-sizing: border-box; z-index: 50; }
+</style>
+</head>
+<body>
+
+<div id="error-screen">
+  <h2 style="margin-bottom: 10px;">カメラエラー</h2>
+  <p id="error-message">カメラの権限が許可されていないか、カメラが見つかりません。<br>ブラウザの設定からカメラへのアクセスを許可してリロードしてください。</p>
+</div>
+
+<div id="camera-container-wrapper">
+  <div id="camera-container">
+    <video id="camera-video" autoplay playsinline muted></video>
+    
+    <!-- 構図ガイド・オーバーレイ -->
+    <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- 常に表示される四分割線（画面を4つのエリアに分ける十字） -->
+      <path class="fixed-grid-line" id="fixed-grid" d="M50 0 V100 M0 50 H100" stroke="rgba(255,255,255,0.5)" />
+      
+      <!-- 選択式の構図ガイド（JSでパスを描画） -->
+      <g id="dynamic-guide" class="guide-line" stroke="white"></g>
+    </svg>
+  </div>
+</div>
+
+<div id="composition-menu">
+  <!-- JavaScriptで動的に生成 -->
+</div>
+
+<div id="controls">
+  <!-- 左下：構図選択 -->
+  <div class="btn-group">
+    <button id="comp-btn">構図選択</button>
+  </div>
+  
+  <!-- 中央：シャッター -->
+  <button id="shutter-btn"></button>
+  
+  <!-- 右下：アスペクト比 ＆ ガイド色 -->
+  <div class="btn-group">
+    <button id="aspect-btn">4:3</button>
+    <button id="color-btn">色: 白</button>
+  </div>
+</div>
+
+<script>
+// ==========================================
+// 1. 状態管理・設定データ
+// ==========================================
+let currentStream = null;
+let currentAspectIndex = 0;
+const aspects = [
+  { label: '4:3', value: '4 / 3' },
+  { label: '16:9', value: '16 / 9' },
+  { label: '1:1', value: '1 / 1' }
+];
+
+let currentColorIndex = 0;
+const colors = [
+  { label: '白', value: 'white' },
+  { label: '黄', value: 'yellow' },
+  { label: '赤', value: '#ff4444' },
+  { label: '青', value: '#44aaff' },
+  { label: '黒', value: 'black' }
+];
+
+// 構図リストとSVGのパス（viewBox 0 0 100 100 に対する相対座標）
+const compositions = [
+  { id: 'none', name: 'オフ', svg: '' },
+  { id: 'thirds', name: '三分割', svg: '<path d="M33.3 0 V100 M66.7 0 V100 M0 33.3 H100 M0 66.7 H100" />' },
+  { id: 'bullseye', name: '日の丸', svg: '<circle cx="50" cy="50" r="20" />' },
+  { id: 'diagonal', name: '対角線', svg: '<path d="M0 0 L100 100 M100 0 L0 100" />' },
+  { id: 'radial', name: '放射線', svg: '<path d="M50 50 L0 0 M50 50 L50 0 M50 50 L100 0 M50 50 L100 50 M50 50 L100 100 M50 50 L50 100 M50 50 L0 100 M50 50 L0 50" />' },
+  { id: 'frame', name: 'フレーム', svg: '<rect x="15" y="15" width="70" height="70" />' },
+  { id: 'symmetry', name: 'シンメトリー', svg: '<path d="M50 0 V100" stroke-width="3" />' },
+  { id: 'scurve', name: 'S字・C字', svg: '<path d="M 70 20 C 20 40, 80 60, 30 80" stroke-width="2" />' },
+  { id: 'triangle', name: '三角', svg: '<path d="M50 20 L20 80 L80 80 Z" />' },
+  { id: 'sandwich', name: 'サンドイッチ', svg: '<rect x="0" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/><rect x="80" y="0" width="20" height="100" fill="currentColor" fill-opacity="0.3"/>' },
+  { id: 'pattern', name: '反復', svg: '<path d="M20 0 V100 M40 0 V100 M60 0 V100 M80 0 V100 M0 20 H100 M0 40 H100 M0 60 H100 M0 80 H100" stroke-width="0.5"/>' }
+];
+
+// ==========================================
+// 2. DOM要素の取得
+// ==========================================
+const video = document.getElementById('camera-video');
+const cameraContainer = document.getElementById('camera-container');
+const dynamicGuide = document.getElementById('dynamic-guide');
+const fixedGrid = document.getElementById('fixed-grid');
+const compMenu = document.getElementById('composition-menu');
+const compBtn = document.getElementById('comp-btn');
+const aspectBtn = document.getElementById('aspect-btn');
+const colorBtn = document.getElementById('color-btn');
+const shutterBtn = document.getElementById('shutter-btn');
+const errorScreen = document.getElementById('error-screen');
+const errorMessage = document.getElementById('error-message');
+
+// ==========================================
+// 3. カメラ初期化処理
+// ==========================================
+async function initCamera() {
+  try {
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
+    }
+    // 背面カメラを優先的に要求
+    const constraints = {
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    };
+    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = currentStream;
+    errorScreen.style.display = 'none';
+  } catch (err) {
+    console.error("Camera Error: ", err);
+    errorScreen.style.display = 'flex';
+    if(err.name === 'NotAllowedError') {
+      errorMessage.innerHTML = 'カメラへのアクセスが拒否されました。<br>ブラウザの権限設定を確認してください。';
+    }
+  }
+}
+
+// ==========================================
+// 4. UI更新処理
+// ==========================================
+
+// 構図メニューの生成
+compositions.forEach((comp) => {
+  const btn = document.createElement('button');
+  btn.textContent = comp.name;
+  btn.onclick = () => {
+    dynamicGuide.innerHTML = comp.svg;
+    compMenu.style.display = 'none';
+    
+    // アクティブ状態の切り替え
+    Array.from(compMenu.children).forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+  };
+  compMenu.appendChild(btn);
+});
+// 初期状態（三分割をセット）
+compMenu.children[1].click();
+
+// 構図メニュー表示トグル
+compBtn.onclick = () => {
+  compMenu.style.display = compMenu.style.display === 'block' ? 'none' : 'block';
+};
+
+// アスペクト比変更
+aspectBtn.onclick = () => {
+  currentAspectIndex = (currentAspectIndex + 1) % aspects.length;
+  const targetAspect = aspects[currentAspectIndex];
+  cameraContainer.style.aspectRatio = targetAspect.value;
+  aspectBtn.textContent = targetAspect.label;
+};
+
+// ガイド色変更
+colorBtn.onclick = () => {
+  currentColorIndex = (currentColorIndex + 1) % colors.length;
+  const targetColor = colors[currentColorIndex];
+  dynamicGuide.setAttribute('stroke', targetColor.value);
+  dynamicGuide.style.color = targetColor.value; // fill="currentColor"用
+  
+  // 常時表示の四分割線の色も薄めに連動
+  fixedGrid.setAttribute('stroke', targetColor.value);
+  fixedGrid.style.opacity = "0.5";
+  
+  colorBtn.textContent = '色: ' + targetColor.label;
+};
+
+// ==========================================
+// 5. 写真撮影（クロップ処理含む）
+// ==========================================
+shutterBtn.onclick = () => {
+  if(!video.videoWidth) return;
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  
+  // 表示されているコンテナの実サイズを取得
+  const containerWidth = cameraContainer.clientWidth;
+  const containerHeight = cameraContainer.clientHeight;
+  
+  // Retinaディスプレイ等に対応するため高画質化係数を設定
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = containerWidth * scale;
+  canvas.height = containerHeight * scale;
+  
+  // videoのオリジナルサイズとアスペクト比計算
+  const vWidth = video.videoWidth;
+  const vHeight = video.videoHeight;
+  const containerRatio = containerWidth / containerHeight;
+  const videoRatio = vWidth / vHeight;
+  
+  let sourceX = 0, sourceY = 0, sourceWidth = vWidth, sourceHeight = vHeight;
+  
+  // object-fit: cover をシミュレートして正確なクロップ範囲を計算
+  if (containerRatio > videoRatio) {
+    // コンテナの方が横長：上下をカット
+    sourceHeight = vWidth / containerRatio;
+    sourceY = (vHeight - sourceHeight) / 2;
+  } else {
+    // コンテナの方が縦長：左右をカット
+    sourceWidth = vHeight * containerRatio;
+    sourceX = (vWidth - sourceWidth) / 2;
+  }
+  
+  // Canvasに描画
+  ctx.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  
+  // 画像としてダウンロード
+  const link = document.createElement('a');
+  link.download = `photo_${new Date().getTime()}.png`;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+  
+  // シャッターを切った演出（画面を一瞬白くする）
+  const flash = document.createElement('div');
+  flash.style.position = 'absolute';
+  flash.style.top = '0'; flash.style.left = '0';
+  flash.style.width = '100%'; flash.style.height = '100%';
+  flash.style.backgroundColor = '#fff';
+  flash.style.zIndex = '100';
+  flash.style.opacity = '1';
+  flash.style.transition = 'opacity 0.3s';
+  document.body.appendChild(flash);
+  
+  setTimeout(() => { flash.style.opacity = '0'; }, 50);
+  setTimeout(() => { document.body.removeChild(flash); }, 350);
+};
+
+// ==========================================
+// 6. 起動
+// ==========================================
+// 画面外をタッチしたらメニューを閉じる
+document.addEventListener('click', (e) => {
+  if(!compMenu.contains(e.target) && e.target !== compBtn) {
+    compMenu.style.display = 'none';
+  }
+});
+
+// 起動処理
+window.onload = initCamera;
+
+</script>
+</body>
+</html>
